@@ -1,6 +1,11 @@
 import React, { useRef, useEffect, useCallback, useState } from "react";
 
-const TEST_INTERVAL_MS = 1500;
+// 每张测试图停留时间(含多帧稳化时间),改慢便于观察
+const TEST_INTERVAL_MS = 3000;
+// 每张图前先连发 N 帧让模型稳定(同一图重复检测,取最后几帧的稳定值)
+const FRAMES_BEFORE_ADVANCE = 5;
+// 单帧检测间隔(同一图内)
+const FRAME_INTERVAL_MS = 600;
 
 // 将图片 URL/路径转 base64（与摄像头帧走相同的 detectHands 通道）
 async function fetchImageAsBase64(src) {
@@ -32,7 +37,10 @@ function CameraView({
   const canvasRef = useRef(null);
   const frameIntervalRef = useRef(null);
   const testTimerRef = useRef(null);
+  const frameCounterRef = useRef(0);
   const [testIndex, setTestIndex] = useState(0);
+  // 用一个递增 tick 强制重渲染(同一张图内每帧更新)
+  const [testTick, setTestTick] = useState(0);
 
   // 摄像头模式：抓帧 → 后端
   const detectFromCamera = useCallback(async () => {
@@ -90,19 +98,28 @@ function CameraView({
   );
 
   useEffect(() => {
-    // 测试模式：不开摄像头,直接轮播图片
+    // 测试模式：不开摄像头,直接轮播图片(每张停留 TEST_INTERVAL_MS,期间连发多帧让模型稳定)
     if (testImages && testImages.length > 0) {
       setTestIndex(0);
+      frameCounterRef.current = 0;
+      setTestTick(0);
+      // 立即对第一张图发一帧
       detectFromTestImage(0);
-      testTimerRef.current = setInterval(() => {
-        setTestIndex((prev) => {
-          const next = (prev + 1) % testImages.length;
-          detectFromTestImage(next);
-          return next;
-        });
-      }, TEST_INTERVAL_MS);
+      // 帧间定时器
+      frameIntervalRef.current = setInterval(() => {
+        frameCounterRef.current += 1;
+        if (frameCounterRef.current >= FRAMES_BEFORE_ADVANCE) {
+          // 切换到下一张
+          frameCounterRef.current = 0;
+          setTestIndex((prev) => (prev + 1) % testImages.length);
+        } else {
+          // 同一张图再发一帧(用 setTestTick 强制重渲染,显示当前帧数)
+          detectFromTestImage(testIndex);
+          setTestTick((t) => t + 1);
+        }
+      }, FRAME_INTERVAL_MS);
       return () => {
-        if (testTimerRef.current) clearInterval(testTimerRef.current);
+        if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
       };
     }
 
@@ -155,8 +172,9 @@ function CameraView({
         <div className="raised-count-badge">举手: {raisedCount}</div>
         {isTestMode && currentTestItem && typeof currentTestItem !== "string" ? (
           <div className="test-mode-badge">
-            测试 · 实际 {currentTestItem.students}人 / 举手{" "}
-            {currentTestItem.raised}
+            测试 {testIndex + 1}/{testImages.length} · 实际{" "}
+            {currentTestItem.students}人 / 举手 {currentTestItem.raised} · 帧
+            {frameCounterRef.current + 1}/{FRAMES_BEFORE_ADVANCE}
           </div>
         ) : null}
       </div>

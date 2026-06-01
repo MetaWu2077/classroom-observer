@@ -10,17 +10,13 @@ const QUESTIONS = [
   "有多少人在尝试 AI 创业",
 ];
 
-// 测试模式：轮播这些图片模拟课堂视频(相对 dist/index.html 解析)
-// Electron 用 file:// 加载,这里用绝对 file:// URL 更稳
-// 全部为"教师视角阶梯教室,学生面向教师,坐着"的图
-// 注：括号内是图片里**真实可见**的学生数和举手数(合成图例外,人工画的举手)
+// 测试模式：轮播根目录下的 3 张 PNG,模拟不同密度的课堂场景
+// 全部为"教师视角阶梯教室,学生面向教师,坐着"
+// 括号内是图片中**目测**的学生数和举手数(用于和模型输出对照)
 const TEST_IMAGES = [
-  { src: "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_teacher.jpg", students: 5, raised: 2 },
-  { src: "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_lecture.jpg", students: 5, raised: 3 },
-  { src: "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_25457343.jpg", students: 15, raised: 0 },
-  { src: "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_10646418.jpg", students: 7, raised: 0 },
-  { src: "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_synth_full.jpg", students: 5, raised: 6 },
-  { src: "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_synth_half.jpg", students: 15, raised: 4 },
+  { src: "file:///D:/myhoney/opc-harness/dev/class/1.png", students: 25, raised: 2 },
+  { src: "file:///D:/myhoney/opc-harness/dev/class/2.png", students: 25, raised: 10 },
+  { src: "file:///D:/myhoney/opc-harness/dev/class/3.png", students: 50, raised: 12 },
 ];
 
 function App() {
