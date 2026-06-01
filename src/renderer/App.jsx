@@ -10,11 +10,22 @@ const QUESTIONS = [
   "有多少人在尝试 AI 创业",
 ];
 
+// 测试模式：轮播这些图片模拟课堂视频(相对 dist/index.html 解析)
+// Electron 用 file:// 加载,这里用绝对 file:// URL 更稳
+const TEST_IMAGES = [
+  "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_lecture.jpg",
+  "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_circle.jpg",
+  "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_masked.jpg",
+  "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_few.jpg",
+  "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_teacher.jpg",
+];
+
 function App() {
   const [raisedCount, setRaisedCount] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
   const [questionIndex, setQuestionIndex] = useState(-1); // -1 表示未选题
   const [statsHistory, setStatsHistory] = useState([]);
+  const [testMode, setTestMode] = useState(false);
 
   const raisedRef = useRef(0);
   const totalRef = useRef(0);
@@ -92,6 +103,14 @@ function App() {
           <span className={`status-dot ${totalCount > 0 ? "active" : ""}`}></span>
           <span>{totalCount > 0 ? "识别中" : "等待人脸"}</span>
         </div>
+        <label className="test-toggle">
+          <input
+            type="checkbox"
+            checked={testMode}
+            onChange={(e) => setTestMode(e.target.checked)}
+          />
+          测试模式
+        </label>
       </header>
 
       <div className="camera-panel">
@@ -101,6 +120,7 @@ function App() {
           totalCount={totalCount}
           onRaisedCountChange={handleRaisedCountChange}
           onTotalCountChange={handleTotalCountChange}
+          testImages={testMode ? TEST_IMAGES : null}
         />
       </div>
 
