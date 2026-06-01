@@ -1,0 +1,17 @@
+# 依赖
+node_modules/
+
+# 构建产物
+src/renderer/dist/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+
+# 运行时数据（统计落盘文件，本地生成不入库）
+src/python/data/
+
+# 媒体管道模型（首次启动自动下载，仓库保持轻量）
+src/python/models/*.tflite
+src/python/models/*.task
