@@ -14,9 +14,9 @@ const QUESTIONS = [
 // path 走 IPC 让主进程读取(避开 renderer file:// CORS 限制)
 // students/raised 用于 UI 角标对照模型输出
 const TEST_IMAGES = [
-  { path: "D:/myhoney/opc-harness/dev/class/1.png", students: 25, raised: 2 },
-  { path: "D:/myhoney/opc-harness/dev/class/2.png", students: 25, raised: 10 },
-  { path: "D:/myhoney/opc-harness/dev/class/3.png", students: 50, raised: 12 },
+  { path: "D:/myhoney/opc-harness/dev/class/1.png", students: 25, raised: 11 },
+  { path: "D:/myhoney/opc-harness/dev/class/2.png", students: 25, raised: 2 },
+  { path: "D:/myhoney/opc-harness/dev/class/3.png", students: 50, raised: 2 },
 ];
 
 function App() {
@@ -25,6 +25,8 @@ function App() {
   const [questionIndex, setQuestionIndex] = useState(-1); // -1 表示未选题
   const [statsHistory, setStatsHistory] = useState([]);
   const [testMode, setTestMode] = useState(false);
+  // 人工校准：教师可微调举手数。null 表示用模型估算值,数字表示用教师覆盖。
+  const [raisedOverride, setRaisedOverride] = useState(null);
 
   const raisedRef = useRef(0);
   const totalRef = useRef(0);
@@ -50,16 +52,19 @@ function App() {
     }
   }, []);
 
+  // 切换题目时清空人工校准
   const handleSelectQuestion = useCallback((idx) => {
     setQuestionIndex(idx);
+    setRaisedOverride(null);
   }, []);
 
-  // 教师点击「确定」：记录当前题 + 当前举手/总人数,自动重置
+  // 教师点击「确定」：用人工校准值(若设了),否则用模型估算
   const handleConfirm = useCallback(async () => {
     if (questionIndex < 0) return;
     if (totalRef.current <= 0) return; // 没识别到人脸,不允许
 
-    capturedRef.current = { raised: raisedRef.current, total: totalRef.current };
+    const finalRaised = raisedOverride !== null ? raisedOverride : raisedRef.current;
+    capturedRef.current = { raised: finalRaised, total: totalRef.current };
 
     const record = {
       id: Date.now().toString(),
@@ -71,6 +76,7 @@ function App() {
 
     // 立即清零当前画面显示(避免教师感觉「确定」后还要等)
     handleRaisedCountChange(0);
+    setRaisedOverride(null); // 校准也清掉
 
     try {
       await window.api.saveStats(record);
@@ -78,7 +84,7 @@ function App() {
     } catch (err) {
       console.error("Save stats error:", err);
     }
-  }, [questionIndex, handleRaisedCountChange, refreshStats]);
+  }, [questionIndex, raisedOverride, handleRaisedCountChange, refreshStats]);
 
   const handleClearStats = useCallback(async () => {
     await window.api.clearStats();
@@ -133,17 +139,65 @@ function App() {
         <div className="current-question">{currentQuestionText}</div>
         <div className="stat-summary">
           <span>
-            举手 <strong>{raisedCount}</strong>
+            模型估算举手 <strong>{raisedCount}</strong>
           </span>
           <span>
             总人数 <strong>{totalCount}</strong>
           </span>
           <span>
-            举手率{" "}
+            模型估算率{" "}
             <strong>
               {totalCount > 0 ? ((raisedCount / totalCount) * 100).toFixed(0) : 0}%
             </strong>
           </span>
+        </div>
+        <div className="override-row">
+          <label>
+            实际举手
+            <input
+              type="number"
+              min="0"
+              max={totalCount}
+              value={raisedOverride === null ? "" : raisedOverride}
+              placeholder={`模型估算 ${raisedCount}`}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "") {
+                  setRaisedOverride(null);
+                } else {
+                  const n = parseInt(v, 10);
+                  if (!isNaN(n) && n >= 0) {
+                    setRaisedOverride(Math.min(n, totalCount));
+                  }
+                }
+              }}
+            />
+            {raisedOverride !== null ? (
+              <button
+                className="btn-clear-override"
+                onClick={() => setRaisedOverride(null)}
+                title="清除校准,使用模型估算"
+              >
+                ✕
+              </button>
+            ) : null}
+          </label>
+          <span className="override-rate">
+            实际率{" "}
+            <strong>
+              {totalCount > 0
+                ? (
+                    ((raisedOverride !== null ? raisedOverride : raisedCount) /
+                      totalCount) *
+                    100
+                  ).toFixed(0)
+                : 0}
+              %
+            </strong>
+          </span>
+        </div>
+        <div className="accuracy-note">
+          ⚠️ AI 生成的远景教室对模型有挑战,数值仅供参考,请以上方"实际举手"为准
         </div>
         <ChartPanel statsHistory={statsHistory} questions={QUESTIONS} />
       </div>
