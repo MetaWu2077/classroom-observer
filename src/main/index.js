@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("path");
+const fs = require("fs");
 const { spawn } = require("child_process");
 
 let mainWindow;
@@ -158,4 +159,17 @@ ipcMain.handle("clear-stats", async () => {
   } catch (error) {
     return { error: `Python service unavailable: ${error.message}` };
   }
+});
+
+// 在主进程读取本地图片文件,返回 data URL(供测试模式使用)
+ipcMain.handle("read-local-file", async (event, filePath) => {
+  const buf = await fs.promises.readFile(filePath);
+  const ext = path.extname(filePath).toLowerCase().replace(".", "");
+  const mime =
+    ext === "png"
+      ? "image/png"
+      : ext === "jpg" || ext === "jpeg"
+      ? "image/jpeg"
+      : "application/octet-stream";
+  return `data:${mime};base64,${buf.toString("base64")}`;
 });

@@ -1,21 +1,4 @@
 const { contextBridge, ipcRenderer } = require("electron");
-const fs = require("fs");
-const path = require("path");
-
-// 在主进程读取本地文件并以 base64 字符串返回,避开 renderer 直接 fetch(file://) 的 CORS 限制
-async function readLocalFileAsBase64(filePath) {
-  try {
-    const buf = await fs.promises.readFile(filePath);
-    const ext = path.extname(filePath).toLowerCase().replace(".", "");
-    const mime =
-      ext === "png" ? "image/png" :
-      ext === "jpg" || ext === "jpeg" ? "image/jpeg" :
-      "application/octet-stream";
-    return `data:${mime};base64,${buf.toString("base64")}`;
-  } catch (err) {
-    throw new Error("readLocalFile failed: " + err.message);
-  }
-}
 
 contextBridge.exposeInMainWorld("api", {
   transcribe: (audioData) => ipcRenderer.invoke("transcribe", audioData),
@@ -23,5 +6,6 @@ contextBridge.exposeInMainWorld("api", {
   saveStats: (data) => ipcRenderer.invoke("save-stats", data),
   getStats: () => ipcRenderer.invoke("get-stats"),
   clearStats: () => ipcRenderer.invoke("clear-stats"),
-  readLocalFile: readLocalFileAsBase64,
+  // 读本地文件改走主进程 IPC(preload 不依赖 Node fs,兼容 sandbox 模式)
+  readLocalFile: (filePath) => ipcRenderer.invoke("read-local-file", filePath),
 });
