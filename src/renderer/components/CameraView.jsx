@@ -1,29 +1,14 @@
 import React, { useRef, useEffect, useCallback, useState } from "react";
 
-// 每张测试图停留时间(含多帧稳化时间),改慢便于观察
-const TEST_INTERVAL_MS = 3000;
-// 每张图前先连发 N 帧让模型稳定(同一图重复检测,取最后几帧的稳定值)
-const FRAMES_BEFORE_ADVANCE = 5;
-// 单帧检测间隔(同一图内)
-const FRAME_INTERVAL_MS = 600;
+// 测试模式节奏(放慢,留出足够时间给后端推理 + UI 观察)
+// 每张图连续检测 N 帧,每帧间隔 FRAME_MS 毫秒
+// 每张图总停留时间 ≈ FRAMES_PER_IMAGE * FRAME_MS
+const FRAMES_PER_IMAGE = 2;
+const FRAME_MS = 6000; // 单帧间隔,大图(MediaPipe 推理 + IPC 读 6MB PNG)需要时间
 
-// 将图片 URL/路径转 base64（与摄像头帧走相同的 detectHands 通道）
-async function fetchImageAsBase64(src) {
-  const res = await fetch(src);
-  if (!res.ok) throw new Error("fetch image failed: " + res.status);
-  const blob = await res.blob();
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      try {
-        resolve(reader.result.split(",")[1]);
-      } catch (e) {
-        reject(e);
-      }
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
+// 测试图源改成普通路径字符串数组(IPC 读),不再依赖 fetch(file://)
+async function readImageAsDataUrl(path) {
+  return await window.api.readLocalFile(path);
 }
 
 function CameraView({
@@ -31,16 +16,15 @@ function CameraView({
   totalCount,
   onRaisedCountChange,
   onTotalCountChange,
-  testImages, // 非空则进入测试模式：每 1.5s 轮播一项
+  testImages, // 非空则进入测试模式：依次轮播每张图,每张多帧稳化
 }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const frameIntervalRef = useRef(null);
-  const testTimerRef = useRef(null);
-  const frameCounterRef = useRef(0);
   const [testIndex, setTestIndex] = useState(0);
-  // 用一个递增 tick 强制重渲染(同一张图内每帧更新)
-  const [testTick, setTestTick] = useState(0);
+  const [testFrame, setTestFrame] = useState(0); // 0..FRAMES_PER_IMAGE-1
+  const [imageDataUrl, setImageDataUrl] = useState(""); // 当前测试图 data URL
+  const [imageError, setImageError] = useState("");
 
   // 摄像头模式：抓帧 → 后端
   const detectFromCamera = useCallback(async () => {
@@ -74,15 +58,17 @@ function CameraView({
     }, "image/jpeg");
   }, [onRaisedCountChange, onTotalCountChange]);
 
-  // 测试模式：按当前 testIndex 取一张图发后端,然后推进
-  const detectFromTestImage = useCallback(
-    async (idx) => {
-      if (!testImages || testImages.length === 0) return;
-      const item = testImages[idx % testImages.length];
-      const src = typeof item === "string" ? item : item?.src;
-      if (!src) return;
+  // 测试模式：单次检测当前图
+  const detectOnce = useCallback(
+    async (item) => {
+      const path = typeof item === "string" ? item : item?.path || item?.src;
+      if (!path) return;
       try {
-        const base64 = await fetchImageAsBase64(src);
+        const dataUrl = await readImageAsDataUrl(path);
+        // 第一次加载时更新显示图
+        setImageDataUrl((prev) => prev || dataUrl);
+        setImageError("");
+        const base64 = dataUrl.split(",")[1];
         const result = await window.api.detectHands(base64);
         if (result.raised_count !== undefined) {
           onRaisedCountChange(result.raised_count);
@@ -92,34 +78,64 @@ function CameraView({
         }
       } catch (err) {
         console.error("Test image detect error:", err);
+        setImageError(String(err.message || err));
       }
     },
-    [testImages, onRaisedCountChange, onTotalCountChange]
+    [onRaisedCountChange, onTotalCountChange]
   );
 
   useEffect(() => {
-    // 测试模式：不开摄像头,直接轮播图片(每张停留 TEST_INTERVAL_MS,期间连发多帧让模型稳定)
+    // 测试模式
     if (testImages && testImages.length > 0) {
-      setTestIndex(0);
-      frameCounterRef.current = 0;
-      setTestTick(0);
-      // 立即对第一张图发一帧
-      detectFromTestImage(0);
-      // 帧间定时器
-      frameIntervalRef.current = setInterval(() => {
-        frameCounterRef.current += 1;
-        if (frameCounterRef.current >= FRAMES_BEFORE_ADVANCE) {
-          // 切换到下一张
-          frameCounterRef.current = 0;
-          setTestIndex((prev) => (prev + 1) % testImages.length);
-        } else {
-          // 同一张图再发一帧(用 setTestTick 强制重渲染,显示当前帧数)
-          detectFromTestImage(testIndex);
-          setTestTick((t) => t + 1);
+      const isTestObjects = typeof testImages[0] === "object";
+      let mounted = true;
+      let timer = null;
+
+      const run = async (idx, frame) => {
+        if (!mounted) return;
+        const item = testImages[idx];
+        // 当图序号变化时,加载新图
+        if (frame === 0) {
+          setImageDataUrl("");
+          setTestFrame(0);
+          try {
+            const dataUrl = await readImageAsDataUrl(
+              isTestObjects ? item.path : item
+            );
+            if (mounted) {
+              setImageDataUrl(dataUrl);
+              setImageError("");
+            }
+          } catch (err) {
+            if (mounted) setImageError(String(err.message || err));
+            return;
+          }
         }
-      }, FRAME_INTERVAL_MS);
+        // 检测一帧
+        await detectOnce(item);
+        if (!mounted) return;
+        setTestFrame(frame);
+        // 决定下一帧
+        if (frame + 1 < FRAMES_PER_IMAGE) {
+          // 同一图下一帧
+          timer = setTimeout(() => run(idx, frame + 1), FRAME_MS);
+        } else {
+          // 切换到下一图
+          timer = setTimeout(
+            () => run((idx + 1) % testImages.length, 0),
+            FRAME_MS
+          );
+          if (mounted) {
+            setTestIndex((idx + 1) % testImages.length);
+          }
+        }
+      };
+
+      run(0, 0);
+
       return () => {
-        if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
+        mounted = false;
+        if (timer) clearTimeout(timer);
       };
     }
 
@@ -143,26 +159,29 @@ function CameraView({
       if (stream) stream.getTracks().forEach((t) => t.stop());
       if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
     };
-  }, [detectFromCamera, detectFromTestImage, testImages]);
+  }, [detectFromCamera, detectOnce, testImages]);
 
   const isTestMode = testImages && testImages.length > 0;
   const currentTestItem = isTestMode
     ? testImages[testIndex % testImages.length]
     : null;
-  const currentSrc =
-    typeof currentTestItem === "string"
-      ? currentTestItem
-      : currentTestItem?.src;
+  const currentItemInfo =
+    currentTestItem && typeof currentTestItem === "object" ? currentTestItem : null;
 
   return (
     <div className="camera-view">
       {isTestMode ? (
-        <img
-          className="test-image"
-          src={currentSrc}
-          alt="test classroom"
-          key={currentSrc}
-        />
+        imageDataUrl ? (
+          <img
+            className="test-image"
+            src={imageDataUrl}
+            alt="test classroom"
+          />
+        ) : (
+          <div className="test-loading">
+            {imageError ? `加载失败: ${imageError}` : "加载测试图中…"}
+          </div>
+        )
       ) : (
         <video ref={videoRef} autoPlay playsInline muted />
       )}
@@ -170,11 +189,11 @@ function CameraView({
       <div className="overlay">
         <div className="count-badge total-badge">总人数: {totalCount}</div>
         <div className="raised-count-badge">举手: {raisedCount}</div>
-        {isTestMode && currentTestItem && typeof currentTestItem !== "string" ? (
+        {isTestMode && currentItemInfo ? (
           <div className="test-mode-badge">
             测试 {testIndex + 1}/{testImages.length} · 实际{" "}
-            {currentTestItem.students}人 / 举手 {currentTestItem.raised} · 帧
-            {frameCounterRef.current + 1}/{FRAMES_BEFORE_ADVANCE}
+            {currentItemInfo.students}人 / 举手 {currentItemInfo.raised} · 帧{" "}
+            {testFrame + 1}/{FRAMES_PER_IMAGE}
           </div>
         ) : null}
       </div>

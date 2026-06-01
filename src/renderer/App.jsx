@@ -11,12 +11,12 @@ const QUESTIONS = [
 ];
 
 // 测试模式：轮播根目录下的 3 张 PNG,模拟不同密度的课堂场景
-// 全部为"教师视角阶梯教室,学生面向教师,坐着"
-// 括号内是图片中**目测**的学生数和举手数(用于和模型输出对照)
+// path 走 IPC 让主进程读取(避开 renderer file:// CORS 限制)
+// students/raised 用于 UI 角标对照模型输出
 const TEST_IMAGES = [
-  { src: "file:///D:/myhoney/opc-harness/dev/class/1.png", students: 25, raised: 2 },
-  { src: "file:///D:/myhoney/opc-harness/dev/class/2.png", students: 25, raised: 10 },
-  { src: "file:///D:/myhoney/opc-harness/dev/class/3.png", students: 50, raised: 12 },
+  { path: "D:/myhoney/opc-harness/dev/class/1.png", students: 25, raised: 2 },
+  { path: "D:/myhoney/opc-harness/dev/class/2.png", students: 25, raised: 10 },
+  { path: "D:/myhoney/opc-harness/dev/class/3.png", students: 50, raised: 12 },
 ];
 
 function App() {
