@@ -4,3 +4,4 @@ mediapipe
 flask
 opencv-python
 numpy
+ultralytics

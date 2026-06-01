@@ -1,10 +1,20 @@
-import mediapipe as mp
-import numpy as np
-import cv2
+"""举手检测。
+
+策略:
+  1. YOLOv8 检测所有 person 框(课堂总人数 = person 数)
+  2. 对每个 person 框,裁剪上半部(头部 + 手臂区域),用 MediaPipe Hands 检测手
+  3. 若手部 wrist 关键点位于 person 框的上 30% 区域,记为举手
+"""
 import os
 import threading
 import urllib.request
+import numpy as np
+import cv2
+import mediapipe as mp
 
+from person_detector import detect_persons
+
+# 兼容旧代码:仍保留 hand_landmarker.task 作为 MediaPipe Hands 模型
 HAND_LANDMARKER_URL = (
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
     "hand_landmarker/float16/1/hand_landmarker.task"
@@ -20,134 +30,116 @@ def ensure_hand_landmarker_model() -> str:
         urllib.request.urlretrieve(HAND_LANDMARKER_URL, model_path)
     return model_path
 
-class HandDetector:
-    def __init__(self):
-        self.backend = "none"
-        self.hands = None
-        self.hand_landmarker = None
-        self.mp_landmark = None
 
-        if hasattr(mp, "solutions") and hasattr(mp.solutions, "hands"):
-            self.mp_hands = mp.solutions.hands
-            self.mp_landmark = self.mp_hands.HandLandmark
-            self.hands = self.mp_hands.Hands(
-                static_image_mode=False,
-                max_num_hands=10,
-                min_detection_confidence=0.2,
-                min_tracking_confidence=0.2,
-            )
-            self.backend = "solutions"
-            return
+_hand_detector = None
+_hand_lock = threading.Lock()
 
-        model_path = ensure_hand_landmarker_model()
-        options = mp.tasks.vision.HandLandmarkerOptions(
-            base_options=mp.tasks.BaseOptions(model_asset_path=model_path),
-            running_mode=mp.tasks.vision.RunningMode.IMAGE,
-            num_hands=10,
-            min_hand_detection_confidence=0.2,
-            min_hand_presence_confidence=0.2,
-            min_tracking_confidence=0.2,
-        )
-        self.hand_landmarker = mp.tasks.vision.HandLandmarker.create_from_options(options)
-        self.backend = "tasks"
 
-    def detect_raised_hands(self, frame: np.ndarray) -> tuple[int, list, int]:
-        """检测举手动作
+def get_hand_detector():
+    """单例 MediaPipe HandLandmarker(tasks API),对每张图(IMAGE 模式)复用。"""
+    global _hand_detector
+    if _hand_detector is None:
+        with _hand_lock:
+            if _hand_detector is None:
+                model_path = ensure_hand_landmarker_model()
+                options = mp.tasks.vision.HandLandmarkerOptions(
+                    base_options=mp.tasks.BaseOptions(model_asset_path=model_path),
+                    running_mode=mp.tasks.vision.RunningMode.IMAGE,
+                    num_hands=2,
+                    min_hand_detection_confidence=0.2,
+                    min_hand_presence_confidence=0.2,
+                    min_tracking_confidence=0.2,
+                )
+                _hand_detector = mp.tasks.vision.HandLandmarker.create_from_options(
+                    options
+                )
+    return _hand_detector
 
-        Args:
-            frame: BGR格式的图像帧
 
-        Returns:
-            (举手人数, 举手的位置列表, 检测到的手数)
-        """
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+def _person_has_raised_hand(person_box, hand_landmarks) -> bool:
+    """判断单个 person 框内检测到的手腕是否在 person 框的上 50% 区域(举手)。
 
-        if self.backend == "solutions":
-            result = self.hands.process(rgb)
-            landmarks_sets = result.multi_hand_landmarks if result.multi_hand_landmarks else []
-            if not landmarks_sets:
-                # 兜底策略：当手较小或光线较差时，放大图像再尝试一次检测。
-                enlarged = cv2.resize(rgb, None, fx=1.6, fy=1.6, interpolation=cv2.INTER_CUBIC)
-                result = self.hands.process(enlarged)
-                landmarks_sets = result.multi_hand_landmarks if result.multi_hand_landmarks else []
-            get_landmark = lambda lms, idx: lms.landmark[idx]
-            wrist_idx, index_tip_idx, middle_tip_idx, ring_tip_idx, pinky_tip_idx = (
-                self.mp_landmark.WRIST,
-                self.mp_landmark.INDEX_FINGER_TIP,
-                self.mp_landmark.MIDDLE_FINGER_TIP,
-                self.mp_landmark.RING_FINGER_TIP,
-                self.mp_landmark.PINKY_TIP,
-            )
-        else:
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            result = self.hand_landmarker.detect(mp_image)
-            landmarks_sets = result.hand_landmarks if result.hand_landmarks else []
-            if not landmarks_sets:
-                enlarged = cv2.resize(rgb, None, fx=1.6, fy=1.6, interpolation=cv2.INTER_CUBIC)
-                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=enlarged)
-                result = self.hand_landmarker.detect(mp_image)
-                landmarks_sets = result.hand_landmarks if result.hand_landmarks else []
-            get_landmark = lambda lms, idx: lms[idx]
-            wrist_idx, index_tip_idx, middle_tip_idx, ring_tip_idx, pinky_tip_idx = (0, 8, 12, 16, 20)
+    阈值放宽到 50% 是因为后排学生头部位置较低;只要手腕高于 person 框中线就算举手。
+    """
+    x1, y1, x2, y2 = person_box
+    box_h = y2 - y1
+    if box_h <= 0:
+        return False
+    raise_threshold_y = y1 + box_h * 0.50
+    for hand in hand_landmarks:
+        wrist = hand[0]
+        wx = wrist.x * (x2 - x1) + x1
+        wy = wrist.y * (y2 - y1) + y1
+        if x1 <= wx <= x2 and wy < raise_threshold_y:
+            return True
+    return False
 
-        raised_hands = []
-        detected_count = len(landmarks_sets)
-        for idx, landmarks in enumerate(landmarks_sets):
-            wrist = get_landmark(landmarks, wrist_idx)
-            index_tip = get_landmark(landmarks, index_tip_idx)
-            middle_tip = get_landmark(landmarks, middle_tip_idx)
-            ring_tip = get_landmark(landmarks, ring_tip_idx)
-            pinky_tip = get_landmark(landmarks, pinky_tip_idx)
 
-            # 降低举手判定阈值：至少一个指尖高于手腕，即可认为有举手动作。
-            finger_tips_above_wrist = sum(
-                tip.y < (wrist.y - 0.01)
-                for tip in [index_tip, middle_tip, ring_tip, pinky_tip]
-            )
-            if finger_tips_above_wrist >= 1:
-                raised_hands.append(idx)
+def detect_hands_in_person_crops(frame: np.ndarray, person_boxes, hand_detector) -> int:
+    """对每个 person 框裁剪后跑 HandLandmarker,返回举手人数。"""
+    raised = 0
+    h, w = frame.shape[:2]
+    for (x1, y1, x2, y2) in person_boxes:
+        # 防越界
+        x1c, y1c = max(0, x1), max(0, y1)
+        x2c, y2c = min(w, x2), min(h, y2)
+        if x2c - x1c < 8 or y2c - y1c < 8:
+            continue
+        crop = frame[y1c:y2c, x1c:x2c]
+        rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result = hand_detector.detect(mp_image)
+        landmarks = result.hand_landmarks if result.hand_landmarks else []
+        if _person_has_raised_hand((x1c, y1c, x2c, y2c), landmarks):
+            raised += 1
+    return raised
 
-        return len(raised_hands), raised_hands, detected_count
-
-_detector = None
-_detector_lock = threading.Lock()
-
-def get_detector():
-    global _detector
-    if _detector is None:
-        # 多线程下加锁，避免首次并发请求重复初始化检测器。
-        with _detector_lock:
-            if _detector is None:
-                _detector = HandDetector()
-    return _detector
 
 def detect_hands(frame_data: bytes) -> dict:
-    """检测举手并统计总人数
+    """主入口:返回 {raised_count, total_count, positions, detected_count}。
 
-    Args:
-        frame_data: JPEG格式的图像数据
-
-    Returns:
-        {"raised_count": int, "positions": list, "detected_count": int, "total_count": int}
+    total_count = YOLO 检出的 person 数
+    raised_count = 手腕在 person 框上 30% 区域的 person 数
     """
     nparr = np.frombuffer(frame_data, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if frame is None:
-        return {"raised_count": 0, "positions": [], "detected_count": 0, "total_count": 0, "error": "Invalid image frame"}
+        return {
+            "raised_count": 0,
+            "positions": [],
+            "detected_count": 0,
+            "total_count": 0,
+            "error": "Invalid image frame",
+        }
 
-    detector = get_detector()
-    raised_count, positions, detected_count = detector.detect_raised_hands(frame)
-
-    # 同帧统计人脸数作为课堂总人数。人脸检测失败不应阻断举手结果。
+    # 1. YOLO 找所有人(降低 conf 阈值以提高对后排/模糊人的检出率)
     try:
-        from face_detection import count_faces
-        total_count = count_faces(frame)
-    except Exception:
-        total_count = 0
+        person_boxes = detect_persons(frame, conf=0.15)
+    except Exception as e:
+        return {
+            "raised_count": 0,
+            "positions": [],
+            "detected_count": 0,
+            "total_count": 0,
+            "error": f"person detect failed: {e}",
+        }
+
+    total_count = len(person_boxes)
+
+    # 2. MediaPipe Hands 找举手
+    raised_count = 0
+    if total_count > 0:
+        try:
+            hand_detector = get_hand_detector()
+            raised_count = detect_hands_in_person_crops(frame, person_boxes, hand_detector)
+        except Exception as e:
+            # 举手检测失败不应影响人数
+            print(f"[hand detect warning] {e}")
+            raised_count = 0
 
     return {
         "raised_count": raised_count,
-        "positions": positions,
-        "detected_count": detected_count,
+        "positions": [b for b in person_boxes if b],  # 兼容旧字段,这里返回所有人框
+        "detected_count": total_count,
         "total_count": total_count,
     }
