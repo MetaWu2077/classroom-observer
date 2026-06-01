@@ -12,12 +12,15 @@ const QUESTIONS = [
 
 // 测试模式：轮播这些图片模拟课堂视频(相对 dist/index.html 解析)
 // Electron 用 file:// 加载,这里用绝对 file:// URL 更稳
+// 全部为"教师视角阶梯教室,学生面向教师,坐着"的图
+// 注：括号内是图片里**真实可见**的学生数和举手数(合成图例外,人工画的举手)
 const TEST_IMAGES = [
-  "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_lecture.jpg",
-  "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_circle.jpg",
-  "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_masked.jpg",
-  "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_few.jpg",
-  "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_teacher.jpg",
+  { src: "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_teacher.jpg", students: 5, raised: 2 },
+  { src: "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_lecture.jpg", students: 5, raised: 3 },
+  { src: "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_25457343.jpg", students: 15, raised: 0 },
+  { src: "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_10646418.jpg", students: 7, raised: 0 },
+  { src: "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_synth_full.jpg", students: 5, raised: 6 },
+  { src: "file:///D:/myhoney/opc-harness/dev/class/test_assets/class_synth_half.jpg", students: 15, raised: 4 },
 ];
 
 function App() {

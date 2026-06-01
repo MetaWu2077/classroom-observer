@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback } from "react";
+import React, { useRef, useEffect, useCallback, useState } from "react";
 
 const TEST_INTERVAL_MS = 1500;
 
@@ -26,13 +26,13 @@ function CameraView({
   totalCount,
   onRaisedCountChange,
   onTotalCountChange,
-  testImages, // 非空则进入测试模式：轮流播放图片
+  testImages, // 非空则进入测试模式：每 1.5s 轮播一项
 }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const frameIntervalRef = useRef(null);
-  const testIndexRef = useRef(0);
   const testTimerRef = useRef(null);
+  const [testIndex, setTestIndex] = useState(0);
 
   // 摄像头模式：抓帧 → 后端
   const detectFromCamera = useCallback(async () => {
@@ -66,31 +66,41 @@ function CameraView({
     }, "image/jpeg");
   }, [onRaisedCountChange, onTotalCountChange]);
 
-  // 测试模式：轮流播放图片
-  const detectFromTestImage = useCallback(async () => {
-    if (!testImages || testImages.length === 0) return;
-    const src = testImages[testIndexRef.current % testImages.length];
-    try {
-      const base64 = await fetchImageAsBase64(src);
-      const result = await window.api.detectHands(base64);
-      if (result.raised_count !== undefined) {
-        onRaisedCountChange(result.raised_count);
+  // 测试模式：按当前 testIndex 取一张图发后端,然后推进
+  const detectFromTestImage = useCallback(
+    async (idx) => {
+      if (!testImages || testImages.length === 0) return;
+      const item = testImages[idx % testImages.length];
+      const src = typeof item === "string" ? item : item?.src;
+      if (!src) return;
+      try {
+        const base64 = await fetchImageAsBase64(src);
+        const result = await window.api.detectHands(base64);
+        if (result.raised_count !== undefined) {
+          onRaisedCountChange(result.raised_count);
+        }
+        if (result.total_count !== undefined && onTotalCountChange) {
+          onTotalCountChange(result.total_count);
+        }
+      } catch (err) {
+        console.error("Test image detect error:", err);
       }
-      if (result.total_count !== undefined && onTotalCountChange) {
-        onTotalCountChange(result.total_count);
-      }
-    } catch (err) {
-      console.error("Test image detect error:", err);
-    }
-    testIndexRef.current = (testIndexRef.current + 1) % testImages.length;
-  }, [testImages, onRaisedCountChange, onTotalCountChange]);
+    },
+    [testImages, onRaisedCountChange, onTotalCountChange]
+  );
 
   useEffect(() => {
     // 测试模式：不开摄像头,直接轮播图片
     if (testImages && testImages.length > 0) {
-      testIndexRef.current = 0;
-      detectFromTestImage(); // 立即跑一次
-      testTimerRef.current = setInterval(detectFromTestImage, TEST_INTERVAL_MS);
+      setTestIndex(0);
+      detectFromTestImage(0);
+      testTimerRef.current = setInterval(() => {
+        setTestIndex((prev) => {
+          const next = (prev + 1) % testImages.length;
+          detectFromTestImage(next);
+          return next;
+        });
+      }, TEST_INTERVAL_MS);
       return () => {
         if (testTimerRef.current) clearInterval(testTimerRef.current);
       };
@@ -119,14 +129,22 @@ function CameraView({
   }, [detectFromCamera, detectFromTestImage, testImages]);
 
   const isTestMode = testImages && testImages.length > 0;
+  const currentTestItem = isTestMode
+    ? testImages[testIndex % testImages.length]
+    : null;
+  const currentSrc =
+    typeof currentTestItem === "string"
+      ? currentTestItem
+      : currentTestItem?.src;
 
   return (
     <div className="camera-view">
       {isTestMode ? (
         <img
           className="test-image"
-          src={testImages[testIndexRef.current % testImages.length]}
+          src={currentSrc}
           alt="test classroom"
+          key={currentSrc}
         />
       ) : (
         <video ref={videoRef} autoPlay playsInline muted />
@@ -135,8 +153,11 @@ function CameraView({
       <div className="overlay">
         <div className="count-badge total-badge">总人数: {totalCount}</div>
         <div className="raised-count-badge">举手: {raisedCount}</div>
-        {isTestMode ? (
-          <div className="test-mode-badge">测试模式</div>
+        {isTestMode && currentTestItem && typeof currentTestItem !== "string" ? (
+          <div className="test-mode-badge">
+            测试 · 实际 {currentTestItem.students}人 / 举手{" "}
+            {currentTestItem.raised}
+          </div>
         ) : null}
       </div>
     </div>
