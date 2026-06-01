@@ -1,40 +1,30 @@
 import React from "react";
 
-// 底部语音输入条：单行文本框 + 实时模式开关。
-// phase: off | listening | capturing —— capturing 时文本框变色提醒。
-// heardText: 最近一次识别到的原文，聆听态下显示，便于确认麦克风/识别是否正常。
-function VoicePanel({ enabled, phase, liveText, heardText, supported, onToggle }) {
-  const placeholder = !supported
-    ? "当前环境不支持录音/语音识别"
-    : phase === "listening"
-    ? "实时聆听中… 说“做个统计”开始"
-    : phase === "capturing"
-    ? "正在采集问题… 说“好的放下”结束"
-    : "点击右侧按钮进入实时语音模式";
-
-  // 采集态显示问题文本；聆听态显示最近识别到的原文（灰字提示）。
-  const value = phase === "capturing" ? liveText : "";
-
+// 底部操作栏：3 个固定问题按钮 + 「确定」按钮。
+// questionIndex: 当前选中的问题下标(-1 表示未选)
+// onSelect: 点击问题按钮
+// onConfirm: 点击「确定」,记录当前题 + 举手数 + 总人数
+// disabled: 举手数为 0 或未选问题/未识别到人脸时禁用确定
+function VoicePanel({ questionIndex, onSelect, onConfirm, disabled }) {
   return (
     <div className="voice-bar">
-      <div className="voice-input-wrap">
-        <input
-          type="text"
-          className={`voice-input ${phase === "capturing" ? "capturing" : ""}`}
-          value={value}
-          placeholder={placeholder}
-          readOnly
-        />
-        {enabled && phase === "listening" && heardText ? (
-          <div className="voice-heard">识别到：{heardText}</div>
-        ) : null}
+      <div className="question-buttons">
+        {[0, 1, 2].map((i) => (
+          <button
+            key={i}
+            className={`btn-question ${questionIndex === i ? "active" : ""}`}
+            onClick={() => onSelect(i)}
+          >
+            第 {i + 1} 题
+          </button>
+        ))}
       </div>
       <button
-        className={`btn-primary voice-toggle ${enabled ? "active" : ""}`}
-        onClick={onToggle}
-        disabled={!supported}
+        className="btn-confirm"
+        onClick={onConfirm}
+        disabled={disabled}
       >
-        {enabled ? "停止" : "实时语音"}
+        确定
       </button>
     </div>
   );

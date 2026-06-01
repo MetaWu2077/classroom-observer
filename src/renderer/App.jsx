@@ -2,17 +2,24 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import CameraView from "./components/CameraView";
 import VoicePanel from "./components/VoicePanel";
 import ChartPanel from "./components/ChartPanel";
-import useSpeechRecognition from "./hooks/useSpeechRecognition";
+
+// 三个固定问题
+const QUESTIONS = [
+  "有多少人用过 AI 编程",
+  "有多少人用过 Agent",
+  "有多少人在尝试 AI 创业",
+];
 
 function App() {
   const [raisedCount, setRaisedCount] = useState(0);
-  const [totalCount, setTotalCount] = useState(0); // 总人数来自视频人脸识别
-  const [currentQuestion, setCurrentQuestion] = useState("");
+  const [totalCount, setTotalCount] = useState(0);
+  const [questionIndex, setQuestionIndex] = useState(-1); // -1 表示未选题
   const [statsHistory, setStatsHistory] = useState([]);
 
-  // 用 ref 保存最新计数，供语音回调在保存时读取实时值。
   const raisedRef = useRef(0);
   const totalRef = useRef(0);
+  // 用 ref 暂存「确定」点击瞬间的快照，避免异步 setState 拿到旧值
+  const capturedRef = useRef({ raised: 0, total: 0 });
 
   const handleRaisedCountChange = useCallback((count) => {
     raisedRef.current = count;
@@ -33,17 +40,27 @@ function App() {
     }
   }, []);
 
-  // 语音侦测到“好的放下”时触发：把当前问题与举手/总人数存为一条记录。
-  const handleVoiceCapture = useCallback(async (question) => {
-    setCurrentQuestion(question);
+  const handleSelectQuestion = useCallback((idx) => {
+    setQuestionIndex(idx);
+  }, []);
+
+  // 教师点击「确定」：记录当前题 + 当前举手/总人数,自动重置
+  const handleConfirm = useCallback(async () => {
+    if (questionIndex < 0) return;
+    if (totalRef.current <= 0) return; // 没识别到人脸,不允许
+
+    capturedRef.current = { raised: raisedRef.current, total: totalRef.current };
 
     const record = {
       id: Date.now().toString(),
       timestamp: new Date().toISOString(),
-      question,
-      total_count: totalRef.current,
-      raised_count: raisedRef.current,
+      question: QUESTIONS[questionIndex],
+      total_count: capturedRef.current.total,
+      raised_count: capturedRef.current.raised,
     };
+
+    // 立即清零当前画面显示(避免教师感觉「确定」后还要等)
+    handleRaisedCountChange(0);
 
     try {
       await window.api.saveStats(record);
@@ -51,39 +68,29 @@ function App() {
     } catch (err) {
       console.error("Save stats error:", err);
     }
-  }, [refreshStats]);
+  }, [questionIndex, handleRaisedCountChange, refreshStats]);
 
-  const { enabled, phase, liveText, heardText, supported, toggle } = useSpeechRecognition(handleVoiceCapture);
-
-  // capturing 阶段把实时听到的问题同步到统计区显示。
-  useEffect(() => {
-    if (phase === "capturing") {
-      setCurrentQuestion(liveText);
-    }
-  }, [phase, liveText]);
-
-  const handleClearStats = async () => {
+  const handleClearStats = useCallback(async () => {
     await window.api.clearStats();
     setStatsHistory([]);
-  };
+    setQuestionIndex(-1);
+  }, []);
 
   useEffect(() => {
     refreshStats();
   }, [refreshStats]);
+
+  const canConfirm = questionIndex >= 0 && totalCount > 0;
+  const currentQuestionText =
+    questionIndex >= 0 ? QUESTIONS[questionIndex] : "请选择一个题目";
 
   return (
     <div className="app">
       <header className="header">
         <h1>课堂观察</h1>
         <div className="status">
-          <span className={`status-dot ${enabled ? "active" : ""}`}></span>
-          <span>
-            {phase === "capturing"
-              ? "采集中"
-              : phase === "listening"
-              ? "聆听中"
-              : "系统就绪"}
-          </span>
+          <span className={`status-dot ${totalCount > 0 ? "active" : ""}`}></span>
+          <span>{totalCount > 0 ? "识别中" : "等待人脸"}</span>
         </div>
       </header>
 
@@ -104,12 +111,14 @@ function App() {
             清空记录
           </button>
         </div>
-        <div className="current-question">
-          {currentQuestion || "暂无问题"}
-        </div>
+        <div className="current-question">{currentQuestionText}</div>
         <div className="stat-summary">
-          <span>举手 <strong>{raisedCount}</strong></span>
-          <span>总人数 <strong>{totalCount}</strong></span>
+          <span>
+            举手 <strong>{raisedCount}</strong>
+          </span>
+          <span>
+            总人数 <strong>{totalCount}</strong>
+          </span>
           <span>
             举手率{" "}
             <strong>
@@ -117,17 +126,15 @@ function App() {
             </strong>
           </span>
         </div>
-        <ChartPanel statsHistory={statsHistory} />
+        <ChartPanel statsHistory={statsHistory} questions={QUESTIONS} />
       </div>
 
       <div className="voice-section">
         <VoicePanel
-          enabled={enabled}
-          phase={phase}
-          liveText={liveText}
-          heardText={heardText}
-          supported={supported}
-          onToggle={toggle}
+          questionIndex={questionIndex}
+          onSelect={handleSelectQuestion}
+          onConfirm={handleConfirm}
+          disabled={!canConfirm}
         />
       </div>
     </div>
